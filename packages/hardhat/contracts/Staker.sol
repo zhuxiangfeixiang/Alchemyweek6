@@ -12,9 +12,18 @@ contract Staker {
   mapping(address => uint256) public depositTimestamps;
 
   uint256 public constant rewardRatePerBlock = 0.1 ether;
-  uint256 public withdrawalDeadline = block.timestamp + 120 seconds;
-  uint256 public claimDeadline = block.timestamp + 240 seconds;
+  // Set withdrawTime to 120 for 2 minutes by default
+  uint256 public withdrawTime = 120;
+  uint256 public withdrawalDeadline = block.timestamp + (withdrawTime * 1 seconds);
+  // Set claimTime to 240 for 4 minutes by default
+  uint256 public claimTime = 240;
+  uint256 public claimDeadline = block.timestamp + (claimTime * 1 seconds);
   uint256 public currentBlock = 0;
+  // Exponential money!!
+  uint256 public exponentMultiplier = 2;
+
+  // Whitelist so that only the exampleExternalContract can modify
+  address public contractWhitelist;
 
   // Events
   event Stake(address indexed sender, uint256 amount);
@@ -22,8 +31,10 @@ contract Staker {
   event Execute(address indexed sender, uint256 amount);
 
   // Modifiers
-  // Checks if the withdrawal period been reached or not
-  modifier withdrawalDeadlineReached(bool requireReached) {
+  /*
+  Checks if the withdrawal period has been reached or not
+  */
+  modifier withdrawalDeadlineReached( bool requireReached ) {
     uint256 timeRemaining = withdrawalTimeLeft();
     if( requireReached ) {
       require(timeRemaining == 0, "Withdrawal period is not reached yet");
@@ -33,8 +44,10 @@ contract Staker {
     _;
   }
 
-  // Checks if the claim period has ended or not
-  modifier claimDeadlineReached(bool requireReached) {
+  /*
+  Checks if the claim period has ended or not
+  */
+  modifier claimDeadlineReached( bool requireReached ) {
     uint256 timeRemaining = claimPeriodLeft();
     if( requireReached ) {
       require(timeRemaining == 0, "Claim deadline is not reached yet");
@@ -44,7 +57,9 @@ contract Staker {
     _;
   }
 
-  // Requires that contract only be completed once!
+  /*
+  Requires that the contract only be completed once!
+  */
   modifier notCompleted() {
     bool completed = exampleExternalContract.completed();
     require(!completed, "Stake already completed!");
@@ -53,10 +68,11 @@ contract Staker {
 
   constructor(address exampleExternalContractAddress){
       exampleExternalContract = ExampleExternalContract(exampleExternalContractAddress);
+      contractWhitelist = exampleExternalContractAddress;
   }
 
   // Stake function for a user to stake ETH in our contract
-  function stake() public payable withdrawalDeadlineReached(false) claimDeadlineReached(false) {
+  function stake() public payable withdrawalDeadlineReached(false) claimDeadlineReached(false){
     balances[msg.sender] = balances[msg.sender] + msg.value;
     depositTimestamps[msg.sender] = block.timestamp;
     emit Stake(msg.sender, msg.value);
@@ -64,17 +80,22 @@ contract Staker {
 
   /*
   Withdraw function for a user to remove their staked ETH inclusive
-  of both principle and any accured interest
+  of both principal and any accrued interest
   */
-  function withdraw() public withdrawalDeadlineReached(true) claimDeadlineReached(false) notCompleted {
+  function withdraw() public withdrawalDeadlineReached(true) claimDeadlineReached(false) notCompleted{
     require(balances[msg.sender] > 0, "You have no balance to withdraw!");
     uint256 individualBalance = balances[msg.sender];
-    uint256 indBalanceRewards = individualBalance + ((block.timestamp-depositTimestamps[msg.sender]) * rewardRatePerSecond);
+    // get the time passed
+    uint256 rewardTime = block.timestamp-depositTimestamps[msg.sender];
+    // multiply time passed by exponent
+    uint256 rewardsMultiplied = rewardTime**exponentMultiplier;
+    // add initial balance to reward rate
+    uint256 indBalanceRewards = individualBalance + (rewardsMultiplied*rewardRatePerBlock);
     balances[msg.sender] = 0;
 
     // Transfer all ETH via call! (not transfer) cc: https://solidity-by-example.org/sending-ether
     (bool sent, bytes memory data) = msg.sender.call{value: indBalanceRewards}("");
-    require(sent, "RIP; withdrawal failed :( ");
+    require(sent, "Failed to send ETH");
   }
 
   /*
@@ -86,8 +107,28 @@ contract Staker {
     exampleExternalContract.complete{value: address(this).balance}();
   }
 
+  // Functions added for reset:
+
   /*
-  READ-ONLY function to calculate time remaining before the minimum staking period has passed
+  Reset withdrawalDeadline blocktime
+  Requires withdrawalDeadlineReached to be true
+  */
+  function resetWithdrawalDeadline(uint256 _seconds) withdrawalDeadlineReached(true) public {
+    require(msg.sender == contractWhitelist, "You are not the exampleExternalContract");
+    withdrawalDeadline = block.timestamp + (_seconds * 1 seconds);
+  }
+
+  /*
+  Reset claimDeadline blocktime
+  Requires claimDeadlineReached to be true
+  */
+  function resetClaimDeadline(uint256 _seconds) claimDeadlineReached(true) public {
+    require(msg.sender == contractWhitelist, "You are not the exampleExternalContract");
+    claimDeadline = block.timestamp + (_seconds * 1 seconds);
+  }
+
+  /*
+  READ-ONLY function to calculate the time remaining before the minimum staking period has passed
   */
   function withdrawalTimeLeft() public view returns (uint256 withdrawalTimeLeft) {
     if( block.timestamp >= withdrawalDeadline) {
@@ -97,8 +138,9 @@ contract Staker {
     }
   }
 
+
   /*
-  READ-ONLY function to calculate time remaining before the minimum staking period has passed
+  READ-ONLY function to calculate the time remaining before the minimum staking period has passed
   */
   function claimPeriodLeft() public view returns (uint256 claimPeriodLeft) {
     if( block.timestamp >= claimDeadline) {
@@ -115,8 +157,8 @@ contract Staker {
     currentBlock = block.timestamp;
   }
 
-  /* 
-  Function for our smart contract to receive ETH
+  /*
+  \Function for our smart contract to receive ETH
   cc: https://docs.soliditylang.org/en/latest/contracts.html#receive-ether-function
   */
   receive() external payable {
